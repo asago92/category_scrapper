@@ -1,0 +1,109 @@
+import streamlit as st
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+import networkx as nx
+import matplotlib.pyplot as plt
+from collections import Counter
+import re
+
+# Page Configuration
+st.set_page_config(
+    page_title="Pet Health Analytics",
+    page_icon="🐾",
+    layout="wide"
+)
+
+# Title and Description
+st.title("🐶 Pet Health Analytics Dashboard")
+st.markdown("""
+**Real-time analysis of pet health discussions**  
+Scraping data from veterinary forums to identify common health patterns.
+""")
+
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def scrape_pet_health_data():
+    base_url = "https://www.pethealthforum.com/forums/"
+    pages_to_scrape = 3  # Adjust as needed
+    data = []
+
+    for page in range(1, pages_to_scrape + 1):
+        url = f"{base_url}page-{page}"
+        try:
+            response = requests.get(url, timeout=10)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            threads = soup.find_all('div', class_='structItem-title')
+            for thread in threads:
+                title = thread.get_text(strip=True)
+                if "health" in title.lower() or "medical" in title.lower():
+                    health_condition = re.search(r'\[(.*?)\]', title)
+                    condition = health_condition.group(1) if health_condition else "General"
+                    data.append({
+                        'title': title,
+                        'condition': condition,
+                        'url': thread.find('a')['href']
+                    })
+        except Exception as e:
+            st.warning(f"Error scraping page {page}: {str(e)}")
+    
+    return pd.DataFrame(data)
+
+# Data Loading
+with st.spinner('Scraping latest pet health discussions...'):
+    df = scrape_pet_health_data()
+
+if not df.empty:
+    st.success(f"Scraped {len(df)} health discussions!")
+    
+    # Top Conditions Chart
+    st.subheader("Top 10 Reported Health Conditions")
+    condition_counts = df['condition'].value_counts().head(10)
+    fig1, ax1 = plt.subplots(figsize=(10,6))
+    condition_counts.plot(kind='bar', color='skyblue', ax=ax1)
+    plt.xticks(rotation=45, ha='right')
+    ax1.set_ylabel("Report Count")
+    ax1.set_title("Most Common Pet Health Issues")
+    st.pyplot(fig1)
+
+    # Symptom Network Analysis
+    st.subheader("Symptom Relationships")
+    symptoms_db = ['vomit', 'diarrhea', 'fever', 'limp', 'rash', 
+                  'cough', 'sneeze', 'itch', 'lump', 'pain']
+    
+    # Extract symptom relationships
+    relationships = []
+    for title in df['title']:
+        found = [s for s in symptoms_db if s in title.lower()]
+        for i in range(len(found)):
+            for j in range(i+1, len(found)):
+                relationships.append(tuple(sorted([found[i], found[j]])))
+    
+    # Create network graph
+    G = nx.Graph()
+    counter = Counter(relationships)
+    
+    for (s1, s2), weight in counter.items():
+        G.add_edge(s1, s2, weight=weight)
+    
+    fig2, ax2 = plt.subplots(figsize=(10,8))
+    pos = nx.spring_layout(G)
+    nx.draw_networkx_nodes(G, pos, node_size=800, node_color='lightcoral', ax=ax2)
+    nx.draw_networkx_edges(
+        G, pos, 
+        width=[d['weight']*0.5 for (u,v,d) in G.edges(data=True)],
+        edge_color='gray'
+    )
+    nx.draw_networkx_labels(G, pos, font_size=12, font_weight='bold', ax=ax2)
+    plt.title("Symptom Co-occurrence Patterns")
+    plt.axis('off')
+    st.pyplot(fig2)
+
+    # Raw Data Toggle
+    if st.checkbox("Show raw scraped data"):
+        st.dataframe(df[['condition', 'title']])
+else:
+    st.error("No data scraped. Please check internet connection or website availability.")
+
+st.markdown("---")
+st.caption("Data source: Scraped from public pet health forums | Updated hourly")
